@@ -18,17 +18,41 @@
 
 ## 安装和配置
 
-### 1. 安装依赖
+### 方法一：使用 npx（推荐）
 ```bash
-cd memos-mcp-server
-npm install
+# 直接运行（需要设置环境变量）
+MEMOS_SERVER_URL=http://localhost:5230 MEMOS_API_TOKEN=your_token npx @ggbmcp/memos-mcp-server
+
+# 或者使用 .env 文件
+# 1. 创建 .env 文件
+echo "MEMOS_SERVER_URL=http://localhost:5230" > .env
+echo "MEMOS_API_TOKEN=your_token_here" >> .env
+
+# 2. 运行
+npx @ggbmcp/memos-mcp-server
+
+# 查看帮助
+npx @ggbmcp/memos-mcp-server --help
+
+# 查看版本
+npx @ggbmcp/memos-mcp-server --version
 ```
 
-### 2. 配置环境变量
-复制 `.env.example` 文件为 `.env` 并填写你的配置：
-
+### 方法二：本地安装
 ```bash
+# 克隆仓库
+git clone https://github.com/ggbmcp/memos-mcp-server.git
+cd memos-mcp-server
+
+# 安装依赖
+npm install
+
+# 配置环境变量
 cp .env.example .env
+# 编辑 .env 文件，填写你的配置
+
+# 运行服务器
+npm start
 ```
 
 编辑 `.env` 文件：
@@ -50,12 +74,28 @@ DEFAULT_VISIBILITY=private
 
 ## 配置 Claude Desktop
 
-### 方法一：通过 Claude Desktop UI 配置
+### 方法一：使用 npx 配置（推荐）
 1. 打开 Claude Desktop 设置
 2. 进入 "Developer" 选项卡
 3. 点击 "Edit Config" 按钮
 4. 添加以下配置：
 
+```json
+{
+  "mcpServers": {
+    "memos": {
+      "command": "npx",
+      "args": ["@ggbmcp/memos-mcp-server"],
+      "env": {
+        "MEMOS_SERVER_URL": "http://localhost:5230",
+        "MEMOS_API_TOKEN": "your_api_token_here"
+      }
+    }
+  }
+}
+```
+
+### 方法二：使用本地路径配置
 ```json
 {
   "mcpServers": {

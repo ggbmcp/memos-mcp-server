@@ -1,21 +1,51 @@
 {
-  "name": "memos-mcp-server",
-  "version": "1.0.0",
+  "name": "@ggbmcp/memos-mcp-server",
+  "version": "1.0.1",
   "description": "MCP Server for Memos - A Model Context Protocol server for interacting with Memos notes application",
   "main": "src/index.js",
   "type": "module",
+  "bin": {
+    "memos-mcp-server": "bin/memos-mcp-server.js"
+  },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "node test/basic.test.js",
+    "prepublishOnly": "npm run test"
   },
   "keywords": [
     "mcp",
     "memos",
     "notes",
-    "knowledge-management"
+    "knowledge-management",
+    "claude",
+    "ai",
+    "model-context-protocol"
   ],
-  "author": "",
+  "author": "ggbmcp",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggbmcp/memos-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ggbmcp/memos-mcp-server/issues"
+  },
+  "homepage": "https://github.com/ggbmcp/memos-mcp-server#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "README.md",
+    "LICENSE",
+    ".env.example",
+    "claude-desktop-config.json"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
     "axios": "^1.6.0",
