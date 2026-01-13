@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "memos": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/memos-mcp-server/src/index.js"
+      ],
+      "env": {
+        "MEMOS_SERVER_URL": "http://localhost:5230",
+        "MEMOS_API_TOKEN": "your_api_token_here",
+        "DEFAULT_VISIBILITY": "private"
+      }
+    }
+  }
+}
+
+/*
+配置说明：
+
+1. 将 `/absolute/path/to/memos-mcp-server` 替换为你的实际路径
+   - Windows 示例: "C:\\Users\\YourName\\projects\\memos-mcp-server\\src\\index.js"
+   - macOS/Linux 示例: "/Users/YourName/projects/memos-mcp-server/src/index.js"
+
+2. 更新环境变量：
+   - MEMOS_SERVER_URL: 你的 Memos 服务器地址
+   - MEMOS_API_TOKEN: 从 Memos 设置中获取的 API Token
+
+3. 将此配置添加到 Claude Desktop 配置文件中：
+   - macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
+   - Windows: %APPDATA%\Claude\claude_desktop_config.json
+   - Linux: ~/.config/Claude/claude_desktop_config.json
+
+4. 重启 Claude Desktop 使配置生效
+
+替代配置方式（使用相对路径和环境变量）：
+{
+  "mcpServers": {
+    "memos": {
+      "command": "node",
+      "args": [
+        "./src/index.js"
+      ],
+      "cwd": "/absolute/path/to/memos-mcp-server",
+      "env": {
+        "MEMOS_SERVER_URL": "http://localhost:5230",
+        "MEMOS_API_TOKEN": "your_api_token_here"
+      }
+    }
+  }
+}
+*/
