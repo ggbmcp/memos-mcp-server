@@ -1,6 +1,6 @@
 {
   "name": "@ggbmcp/memos-mcp-server",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP Server for Memos - A Model Context Protocol server for interacting with Memos notes application",
   "main": "src/index.js",
   "type": "module",
