@@ -32,7 +32,8 @@ export class MemosClient {
 
   // Helper method to extract tags from content
   extractTags(content) {
-    const tagRegex = /#(\w+)/g;
+    // Match # followed by any word characters (including Unicode/Chinese)
+    const tagRegex = /#([\p{L}\p{N}_]+)/gu;
     const tags = [];
     let match;
     while ((match = tagRegex.exec(content)) !== null) {
@@ -43,10 +44,18 @@ export class MemosClient {
 
   // Helper method to check if content is a todo
   isTodo(content) {
-    return content.toLowerCase().includes("- [ ]") ||
-           content.toLowerCase().includes("[x]") ||
-           content.toLowerCase().includes("todo:") ||
-           content.toLowerCase().includes("待办:");
+    const lowerContent = content.toLowerCase();
+    // Check for todo patterns (with or without numbers)
+    const todoPatterns = [
+      /^\d*\.?\s*-\s*\[\s*\]/i,      // 1. - [ ] or - [ ]
+      /^\d*\.?\s*-\s*\[\s*x\s*\]/i,  // 1. - [x] or - [x]
+      /^\d*\.?\s*\[\s*\]/i,          // 1. [ ] or [ ]
+      /^\d*\.?\s*\[\s*x\s*\]/i,      // 1. [x] or [x]
+      /^\d*\.?\s*todo:/i,            // 1. TODO: or TODO:
+      /^\d*\.?\s*待办:/i,            // 1. 待办: or 待办:
+    ];
+
+    return todoPatterns.some(pattern => pattern.test(lowerContent));
   }
 
   // Helper method to normalize ID for API calls
@@ -193,11 +202,15 @@ export class MemosClient {
         const memoPinned = memo.pinned || false;
         const memoState = memo.state || memo.rowStatus || "NORMAL";
 
+        // Extract tags and remove duplicates
+        const extractedTags = this.extractTags(memoContent);
+        const uniqueTags = [...new Set(extractedTags)];
+
         return {
           id: id || 0,
           name: memo.name || "",
           content: memoContent,
-          tags: this.extractTags(memoContent),
+          tags: uniqueTags,
           isTodo: this.isTodo(memoContent),
           createdAt,
           updatedAt,
@@ -238,8 +251,23 @@ export class MemosClient {
       // Combine tags with content if provided
       let finalContent = content;
       if (tags && tags.length > 0) {
-        const tagString = tags.map(tag => `#${tag}`).join(" ");
-        finalContent = `${content}\n\n${tagString}`;
+        // Extract tags already present in content
+        const existingTags = this.extractTags(content);
+
+        // Filter out tags that are already in content
+        const newTags = tags.filter(tag => !existingTags.includes(tag));
+
+        if (newTags.length > 0) {
+          const tagString = newTags.map(tag => `#${tag}`).join(" ");
+          // Check if content already ends with newline
+          if (content.trim().endsWith('\n')) {
+            finalContent = `${content.trim()}\n${tagString}`;
+          } else {
+            finalContent = `${content}\n\n${tagString}`;
+          }
+        } else {
+          finalContent = content;
+        }
       }
 
       console.error(`[DEBUG] Creating memo with content: ${finalContent.substring(0, 50)}...`);
@@ -287,11 +315,15 @@ export class MemosClient {
         createdAt = memo.createTime;
       }
 
+      // Extract tags and remove duplicates
+      const extractedTags = this.extractTags(memo.content || finalContent);
+      const uniqueTags = [...new Set(extractedTags)];
+
       return this.formatResponse({
         id: id || 0,
         name: memo.name || "",
         content: memo.content || finalContent,
-        tags: this.extractTags(memo.content || finalContent),
+        tags: uniqueTags,
         isTodo: this.isTodo(memo.content || finalContent),
         createdAt,
         visibility: memo.visibility || visibility,
@@ -501,55 +533,155 @@ export class MemosClient {
   async getTodoMemos({ limit = 20, includeCompleted = false } = {}) {
     try {
       let response;
+      let apiVersion = "unknown";
       try {
         response = await this.client.get("/api/v1/memos");
+        apiVersion = "v1";
       } catch (error) {
-        response = await this.client.get("/api/memo");
+        try {
+          response = await this.client.get("/api/memo");
+          apiVersion = "legacy";
+        } catch (fallbackError) {
+          throw new Error(`Failed to fetch memos: ${error.message}. Also tried: ${fallbackError.message}`);
+        }
       }
-      let memos = response.data || [];
+
+      // Handle different response formats
+      let memos = [];
+      if (response.data && response.data.memos && Array.isArray(response.data.memos)) {
+        // Google Keep style API: { memos: [...] }
+        memos = response.data.memos;
+        apiVersion = apiVersion + "-google-keep";
+      } else if (Array.isArray(response.data)) {
+        // Direct array response
+        memos = response.data;
+        apiVersion = apiVersion + "-array";
+      } else {
+        // Unknown format
+        console.error(`[DEBUG] Unknown API response format for getTodoMemos:`, typeof response.data);
+        memos = [];
+        apiVersion = apiVersion + "-unknown";
+      }
+
+      console.error(`[DEBUG] getTodoMemos using API version: ${apiVersion}, Found ${memos.length} raw memos`);
 
       // Filter for todos
-      memos = memos.filter(memo => this.isTodo(memo.content));
+      memos = memos.filter(memo => {
+        const memoContent = memo.content || "";
+        return this.isTodo(memoContent);
+      });
 
       // Filter out completed todos if needed
       if (!includeCompleted) {
-        memos = memos.filter(memo =>
-          !memo.content.toLowerCase().includes("[x]") &&
-          !memo.content.toLowerCase().includes("完成")
-        );
+        memos = memos.filter(memo => {
+          const memoContent = memo.content || "";
+          return !memoContent.toLowerCase().includes("[x]") &&
+                 !memoContent.toLowerCase().includes("完成");
+        });
       }
 
       // Limit results
       memos = memos.slice(0, limit);
 
-      // Parse todo items
-      const todos = memos.map(memo => {
-        const content = memo.content;
-        const isCompleted = content.toLowerCase().includes("[x]") ||
-                           content.toLowerCase().includes("完成");
+      // Parse todo items - extract multiple todos from each memo
+      const allTodoItems = [];
 
-        // Extract todo title (first line or todo marker)
-        let title = content.split('\n')[0];
-        if (title.includes("- [ ]") || title.includes("[x]")) {
-          title = title.replace(/\[[ x]\]\s*/, "").trim();
+      memos.forEach(memo => {
+        const content = memo.content || "";
+
+        // Extract multiple todo items from the content
+        const todoItems = this.extractTodoItems(content);
+
+        // Handle different timestamp formats for the parent memo
+        let memoCreatedAt = null;
+        if (memo.createdTs) {
+          memoCreatedAt = new Date(memo.createdTs * 1000).toISOString();
+        } else if (memo.createdAt) {
+          memoCreatedAt = memo.createdAt;
+        } else if (memo.createTime) {
+          memoCreatedAt = memo.createTime;
         }
 
-        return {
-          id: memo.id,
-          title,
-          content,
-          isCompleted,
-          tags: this.extractTags(content),
-          createdAt: memo.createdTs ? new Date(memo.createdTs * 1000).toISOString() : null,
-          priority: this.extractPriority(content),
-        };
+        // Extract tags from the entire content
+        const memoTags = this.extractTags(content);
+        const memoPriority = this.extractPriority(content);
+
+        // Extract ID from name field (Google Keep style) or use id field
+        let memoId = memo.id;
+        if (!memoId && memo.name) {
+          // For Google Keep style API, use the full name as ID
+          memoId = memo.name;
+        }
+
+        // Create todo items for each extracted todo
+        todoItems.forEach((todoItem, index) => {
+          allTodoItems.push({
+            id: memoId || 0,
+            name: memo.name || "",
+            memoId: memoId || 0, // Parent memo ID
+            memoName: memo.name || "", // Parent memo name
+            title: todoItem.title,
+            description: todoItem.description,
+            content: todoItem.description ? `${todoItem.title}\n\n${todoItem.description}` : todoItem.title,
+            isCompleted: todoItem.isCompleted,
+            tags: memoTags, // Use parent memo's tags
+            createdAt: memoCreatedAt,
+            priority: memoPriority,
+            lineNumber: todoItem.lineNumber,
+            itemIndex: index + 1,
+            totalItems: todoItems.length,
+          });
+        });
+
+        // If no structured todo items were found but the memo is marked as a todo,
+        // create a single todo item from the entire memo
+        if (todoItems.length === 0 && this.isTodo(content)) {
+          const lines = content.split('\n');
+          const firstLine = lines[0].trim();
+          let title = firstLine;
+
+          // Clean up todo markers from title
+          title = title.replace(/^-\s*\[\s*[ x]\s*\]\s*/i, '')
+                      .replace(/^\[\s*[ x]\s*\]\s*/i, '')
+                      .replace(/^todo:\s*/i, '')
+                      .replace(/^待办:\s*/i, '')
+                      .trim();
+
+          const description = lines.slice(1).join('\n').trim();
+          const isCompleted = content.toLowerCase().includes('[x]') ||
+                             content.toLowerCase().includes('完成');
+
+          allTodoItems.push({
+            id: memoId || 0,
+            name: memo.name || "",
+            memoId: memoId || 0,
+            memoName: memo.name || "",
+            title: title || 'Untitled Todo',
+            description,
+            content: description ? `${title}\n\n${description}` : title,
+            isCompleted,
+            tags: memoTags,
+            createdAt: memoCreatedAt,
+            priority: memoPriority,
+            lineNumber: 1,
+            itemIndex: 1,
+            totalItems: 1,
+          });
+        }
       });
 
+      // Apply limit to the total number of todo items (not memos)
+      const limitedTodoItems = allTodoItems.slice(0, limit);
+
       return this.formatResponse({
-        count: todos.length,
-        todos,
-      }, `Found ${todos.length} todo items`);
+        count: limitedTodoItems.length,
+        totalMemos: memos.length,
+        totalTodoItems: allTodoItems.length,
+        todos: limitedTodoItems,
+        apiVersion,
+      }, `Found ${limitedTodoItems.length} todo items from ${memos.length} memos`);
     } catch (error) {
+      console.error(`[ERROR] getTodoMemos failed: ${error.message}`);
       throw new Error(`Failed to get todo memos: ${error.message}`);
     }
   }
@@ -567,33 +699,220 @@ export class MemosClient {
     return "medium";
   }
 
-  // Create todo
-  async createTodo({ title, description = "", tags = [], priority = "medium" }) {
-    try {
-      // Format todo content
-      let content = `- [ ] ${title}`;
-      if (description) {
-        content += `\n\n${description}`;
+  // Format multiple todo items into a single memo content
+  formatMultipleTodos(todos, commonTags = [], commonPriority = "medium") {
+    if (!todos || todos.length === 0) {
+      throw new Error("No todo items provided");
+    }
+
+    let content = "";
+
+    // Add each todo item
+    todos.forEach((todo, index) => {
+      const todoTitle = todo.title || `待办事项 ${index + 1}`;
+      const todoDescription = todo.description || "";
+      const isCompleted = todo.isCompleted || false;
+      const todoPriority = todo.priority || commonPriority;
+
+      // Use correct format: checkbox before text, no numbers
+      const checkbox = isCompleted ? "- [x]" : "- [ ]";
+
+      if (index > 0) {
+        content += "\n";
       }
 
-      // Add priority tag
-      content += `\n\npriority: ${priority}`;
+      // Check if description already contains priority
+      const descriptionLower = todoDescription.toLowerCase();
+      const hasPriorityInDescription =
+        descriptionLower.includes("priority:") ||
+        descriptionLower.includes("优先级:");
 
-      // Add tags
-      if (tags.length > 0) {
-        const tagString = tags.map(tag => `#${tag}`).join(" ");
+      // Add todo with priority on same line if specified and not default and not already in description
+      if (todoPriority !== "medium" && todoPriority !== commonPriority && !hasPriorityInDescription) {
+        // Show priority in bold on same line
+        content += `${checkbox} ${todoTitle} **priority: ${todoPriority}**`;
+      } else {
+        content += `${checkbox} ${todoTitle}`;
+      }
+
+      // Add description with single line break if exists
+      if (todoDescription) {
+        content += `\n${todoDescription}`;
+      }
+    });
+
+    // Add common priority only if specified and not default
+    if (commonPriority !== "medium") {
+      // Check if content already ends with newline
+      if (content.endsWith('\n')) {
+        content += `\n**共同优先级: ${commonPriority}**`;
+      } else {
+        content += `\n\n**共同优先级: ${commonPriority}**`;
+      }
+    }
+
+    // Add common tags and todo tag
+    const allTags = [...commonTags, "todo"];
+    if (allTags.length > 0) {
+      const tagString = allTags.map(tag => `#${tag}`).join(" ");
+      // Check if content already ends with newline
+      if (content.endsWith('\n')) {
         content += `\n${tagString}`;
+      } else {
+        content += `\n\n${tagString}`;
       }
+    }
 
-      // Add todo tag
-      content += `\n#todo`;
+    return content;
+  }
+
+  // Extract multiple todo items from content
+  extractTodoItems(content) {
+    const items = [];
+    const lines = content.split('\n');
+
+    // Patterns to match todo items
+    const todoPatterns = [
+      /^-\s*\[\s*\]\s*(.+)$/i,      // - [ ] something
+      /^-\s*\[\s*x\s*\]\s*(.+)$/i,   // - [x] something
+      /^\[\s*\]\s*(.+)$/i,           // [ ] something
+      /^\[\s*x\s*\]\s*(.+)$/i,       // [x] something
+      /^(\d+\.\s*)?todo:\s*(.+)$/i,  // TODO: something or 5. TODO: something
+      /^(\d+\.\s*)?待办:\s*(.+)$/i,  // 待办: something or 5. 待办: something
+      // Also match numbered items but we'll clean up the number prefix
+      /^(\d+\.\s*)?-\s*\[\s*\]\s*(.+)$/i, // 1. - [ ] something or - [ ] something
+      /^(\d+\.\s*)?-\s*\[\s*x\s*\]\s*(.+)$/i, // 1. - [x] something or - [x] something
+      /^(\d+\.\s*)?\[\s*\]\s*(.+)$/i,   // 1. [ ] something or [ ] something
+      /^(\d+\.\s*)?\[\s*x\s*\]\s*(.+)$/i, // 1. [x] something or [x] something
+    ];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Check if line matches any todo pattern
+      for (const pattern of todoPatterns) {
+        const match = line.match(pattern);
+        if (match) {
+          // Determine which capture group contains the title
+          // For patterns with optional number prefix: match[1] = number, match[2] = title
+          // For patterns without number prefix: match[1] = title
+          let title = '';
+          if (match[2] !== undefined) {
+            // Pattern has number prefix (match[1] may be "1. " or undefined)
+            title = match[2].trim();
+          } else {
+            // Pattern without number prefix
+            title = match[1].trim();
+          }
+
+          const isCompleted = line.toLowerCase().includes('[x]');
+
+          // Try to get description from next lines (until next todo or empty line)
+          let description = '';
+          let j = i + 1;
+          while (j < lines.length &&
+                 !todoPatterns.some(p => p.test(lines[j].trim())) &&
+                 lines[j].trim() !== '') {
+            description += (description ? '\n' : '') + lines[j].trim();
+            j++;
+          }
+
+          items.push({
+            title,
+            description,
+            isCompleted,
+            lineNumber: i + 1,
+          });
+          break;
+        }
+      }
+    }
+
+    // If no structured todo items found but content contains todo markers,
+    // treat the entire content as one todo item
+    if (items.length === 0 && this.isTodo(content)) {
+      const lines = content.split('\n');
+      const firstLine = lines[0].trim();
+      let title = firstLine;
+
+      // Clean up todo markers from title
+      title = title.replace(/^-\s*\[\s*[ x]\s*\]\s*/i, '')
+                   .replace(/^\[\s*[ x]\s*\]\s*/i, '')
+                   .replace(/^todo:\s*/i, '')
+                   .replace(/^待办:\s*/i, '')
+                   .trim();
+
+      const description = lines.slice(1).join('\n').trim();
+      const isCompleted = content.toLowerCase().includes('[x]') ||
+                         content.toLowerCase().includes('完成');
+
+      items.push({
+        title: title || 'Untitled Todo',
+        description,
+        isCompleted,
+        lineNumber: 1,
+      });
+    }
+
+    return items;
+  }
+
+  // Create todo - supports single todo or multiple todos
+  async createTodo({ title, description = "", tags = [], priority = "medium", todos }) {
+    try {
+      let content;
+      let finalTags = [...tags, "todo"];
+      let shouldAddTagsViaCreateMemo = true; // Flag to control tag addition
+
+      // Check if we're creating multiple todos
+      if (todos && Array.isArray(todos) && todos.length > 0) {
+        // Create multiple todos in one memo
+        console.error(`[DEBUG] Creating ${todos.length} todos in one memo`);
+
+        // Use the new formatMultipleTodos function
+        content = this.formatMultipleTodos(todos, tags, priority);
+
+        // For multiple todos, we might want to add a title/header
+        if (title) {
+          content = `${title}\n\n${content}`;
+        }
+
+        // Tags are already added in formatMultipleTodos, so don't add them again
+        shouldAddTagsViaCreateMemo = false;
+      } else if (title) {
+        // Single todo (backward compatibility)
+        console.error(`[DEBUG] Creating single todo: ${title}`);
+
+        // Check if description already contains priority
+        const descriptionLower = description.toLowerCase();
+        const hasPriorityInDescription =
+          descriptionLower.includes("priority:") ||
+          descriptionLower.includes("优先级:");
+
+        // Format todo content with priority on same line if not default and not already in description
+        if (priority !== "medium" && !hasPriorityInDescription) {
+          content = `- [ ] ${title} **priority: ${priority}**`;
+        } else {
+          content = `- [ ] ${title}`;
+        }
+
+        if (description) {
+          content += `\n${description}`;
+        }
+
+        // Note: Tags will be added by createMemo function
+        // We don't add them here to avoid duplication
+      } else {
+        throw new Error("Either 'title' or 'todos' parameter is required");
+      }
 
       return await this.createMemo({
         content,
-        tags: [...tags, "todo"],
+        tags: shouldAddTagsViaCreateMemo ? finalTags : [],
         visibility: "private",
       });
     } catch (error) {
+      console.error(`[ERROR] createTodo failed: ${error.message}`);
       throw new Error(`Failed to create todo: ${error.message}`);
     }
   }
@@ -776,11 +1095,15 @@ export class MemosClient {
         memoId = directMemo.name;
       }
 
+      // Extract tags and remove duplicates
+      const extractedTags = this.extractTags(directMemo.content || "");
+      const uniqueTags = [...new Set(extractedTags)];
+
       return this.formatResponse({
         id: memoId || id,
         name: directMemo.name || "",
         content: directMemo.content || "",
-        tags: this.extractTags(directMemo.content || ""),
+        tags: uniqueTags,
         isTodo: this.isTodo(directMemo.content || ""),
         createdAt,
         updatedAt,
