@@ -43,7 +43,7 @@ export class MemosClient {
 
   // Helper method to check if content is a todo
   isTodo(content) {
-    return content.toLowerCase().includes("[ ]") ||
+    return content.toLowerCase().includes("- - [ ]") ||
            content.toLowerCase().includes("[x]") ||
            content.toLowerCase().includes("todo:") ||
            content.toLowerCase().includes("待办:");
@@ -530,7 +530,7 @@ export class MemosClient {
 
         // Extract todo title (first line or todo marker)
         let title = content.split('\n')[0];
-        if (title.includes("[ ]") || title.includes("[x]")) {
+        if (title.includes("- - [ ]") || title.includes("[x]")) {
           title = title.replace(/\[[ x]\]\s*/, "").trim();
         }
 
@@ -571,7 +571,7 @@ export class MemosClient {
   async createTodo({ title, description = "", tags = [], priority = "medium" }) {
     try {
       // Format todo content
-      let content = `[ ] ${title}`;
+      let content = `- - [ ] ${title}`;
       if (description) {
         content += `\n\n${description}`;
       }
@@ -618,7 +618,7 @@ export class MemosClient {
 
       // Update content to mark as completed
       let content = memo.content;
-      content = content.replace("[ ]", "[x]");
+      content = content.replace("- - [ ]", "[x]");
       content = content.replace(/todo:/i, "完成:");
 
       // Update the memo

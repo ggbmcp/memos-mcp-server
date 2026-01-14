@@ -20,7 +20,7 @@ console.log(`   ✓ Expected: ["memo", "tags", "multiple"]\n`);
 
 console.log('2. Testing todo detection:');
 const todoTests = [
-  { content: '[ ] Buy groceries', expected: true },
+  { content: '- [ ] Buy groceries', expected: true },
   { content: '[x] Finish report', expected: true },
   { content: 'TODO: Call John', expected: true },
   { content: '待办: 发送邮件', expected: true },
